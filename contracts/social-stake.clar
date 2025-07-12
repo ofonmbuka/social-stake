@@ -542,3 +542,81 @@
     )
   )
 )
+
+;; Update profile information
+(define-public (update-profile (bio (string-utf8 280)) (avatar-url (string-ascii 200)))
+  (let
+    (
+      (profile-result (map-get? principal-to-profile tx-sender))
+    )
+    (match profile-result
+      profile-id
+      (match (get-profile profile-id)
+        profile-data
+        (begin
+          (map-set profiles
+            { profile-id: profile-id }
+            (merge profile-data { bio: bio, avatar-url: avatar-url })
+          )
+          (ok true)
+        )
+        ERR_PROFILE_NOT_FOUND
+      )
+      ERR_PROFILE_NOT_FOUND
+    )
+  )
+)
+
+;; Increase reputation through additional staking
+(define-public (stake-for-reputation (amount uint))
+  (let
+    (
+      (profile-result (map-get? principal-to-profile tx-sender))
+      (current-block stacks-block-height)
+    )
+    ;; Validate minimum stake
+    (asserts! (>= amount MIN_POST_BOOST) ERR_INVALID_AMOUNT)
+    
+    ;; Check user's balance
+    (asserts! (>= (stx-get-balance tx-sender) amount) ERR_INSUFFICIENT_FUNDS)
+    
+    (match profile-result
+      profile-id
+      (begin
+        ;; Transfer additional stake to protocol
+        (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+        
+        ;; Update profile's total stake
+        (match (get-profile profile-id)
+          profile-data
+          (map-set profiles
+            { profile-id: profile-id }
+            (merge profile-data { staked-amount: (+ (get staked-amount profile-data) amount) })
+          )
+          false
+        )
+        
+        ;; Record stake transaction
+        (map-set profile-stakes
+          { profile-id: profile-id, staker: tx-sender }
+          { amount: amount, staked-at: current-block }
+        )
+        
+        (ok true)
+      )
+      ERR_PROFILE_NOT_FOUND
+    )
+  )
+)
+
+;; PROTOCOL ADMINISTRATION
+
+;; Update protocol fee structure (owner only)
+(define-public (set-protocol-fee-rate (new-rate uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    (asserts! (<= new-rate u1000) ERR_INVALID_AMOUNT) ;; Maximum 10% fee
+    (var-set protocol-fee-rate new-rate)
+    (ok true)
+  )
+)
