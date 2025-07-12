@@ -248,3 +248,99 @@
     (ok profile-id)
   )
 )
+
+;; Establish social connection
+(define-public (follow-user (following-id uint))
+  (let
+    (
+      (follower-profile-result (map-get? principal-to-profile tx-sender))
+      (current-block stacks-block-height)
+    )
+    ;; Resolve follower identity
+    (match follower-profile-result
+      follower-id
+      (begin
+        ;; Prevent self-following
+        (asserts! (not (is-eq follower-id following-id)) ERR_SELF_FOLLOW)
+        
+        ;; Validate target profile exists
+        (asserts! (is-some (get-profile following-id)) ERR_PROFILE_NOT_FOUND)
+        
+        ;; Check for existing relationship
+        (asserts! (not (is-following follower-id following-id)) ERR_ALREADY_FOLLOWING)
+        
+        ;; Create follow relationship
+        (map-set following
+          { follower: follower-id, following: following-id }
+          { followed-at: current-block, is-active: true }
+        )
+        
+        ;; Update follower metrics for target
+        (match (get-profile following-id)
+          following-profile
+          (map-set profiles
+            { profile-id: following-id }
+            (merge following-profile { follower-count: (+ (get follower-count following-profile) u1) })
+          )
+          false
+        )
+        
+        ;; Update following metrics for follower
+        (match (get-profile follower-id)
+          follower-profile
+          (map-set profiles
+            { profile-id: follower-id }
+            (merge follower-profile { following-count: (+ (get following-count follower-profile) u1) })
+          )
+          false
+        )
+        
+        (ok true)
+      )
+      ERR_PROFILE_NOT_FOUND
+    )
+  )
+)
+
+;; Remove social connection
+(define-public (unfollow-user (following-id uint))
+  (let
+    (
+      (follower-profile-result (map-get? principal-to-profile tx-sender))
+    )
+    ;; Resolve follower identity
+    (match follower-profile-result
+      follower-id
+      (begin
+        ;; Verify existing relationship
+        (asserts! (is-following follower-id following-id) ERR_NOT_FOLLOWING)
+        
+        ;; Remove follow relationship
+        (map-delete following { follower: follower-id, following: following-id })
+        
+        ;; Decrement follower count for target
+        (match (get-profile following-id)
+          following-profile
+          (map-set profiles
+            { profile-id: following-id }
+            (merge following-profile { follower-count: (- (get follower-count following-profile) u1) })
+          )
+          false
+        )
+        
+        ;; Decrement following count for follower
+        (match (get-profile follower-id)
+          follower-profile
+          (map-set profiles
+            { profile-id: follower-id }
+            (merge follower-profile { following-count: (- (get following-count follower-profile) u1) })
+          )
+          false
+        )
+        
+        (ok true)
+      )
+      ERR_PROFILE_NOT_FOUND
+    )
+  )
+)
