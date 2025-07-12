@@ -344,3 +344,86 @@
     )
   )
 )
+
+;; Publish content to social graph
+(define-public (create-post (content (string-utf8 500)))
+  (let
+    (
+      (author-profile-result (map-get? principal-to-profile tx-sender))
+      (post-id (var-get next-post-id))
+      (current-block stacks-block-height)
+    )
+    ;; Resolve author identity
+    (match author-profile-result
+      author-id
+      (begin
+        ;; Create post record
+        (map-set posts
+          { post-id: post-id }
+          {
+            author: author-id,
+            content: content,
+            created-at: current-block,
+            boosted-amount: u0,
+            endorsement-count: u0,
+            is-active: true
+          }
+        )
+        
+        ;; Update author's content metrics
+        (match (get-profile author-id)
+          author-profile
+          (map-set profiles
+            { profile-id: author-id }
+            (merge author-profile { post-count: (+ (get post-count author-profile) u1) })
+          )
+          false
+        )
+        
+        ;; Increment post counter
+        (var-set next-post-id (+ post-id u1))
+        
+        (ok post-id)
+      )
+      ERR_PROFILE_NOT_FOUND
+    )
+  )
+)
+
+;; Amplify content with economic backing
+(define-public (boost-post (post-id uint) (amount uint))
+  (let
+    (
+      (current-block stacks-block-height)
+    )
+    ;; Validate minimum boost amount
+    (asserts! (>= amount MIN_POST_BOOST) ERR_INVALID_AMOUNT)
+    
+    ;; Verify post exists
+    (asserts! (is-some (get-post post-id)) ERR_POST_NOT_FOUND)
+    
+    ;; Check user's balance
+    (asserts! (>= (stx-get-balance tx-sender) amount) ERR_INSUFFICIENT_FUNDS)
+    
+    ;; Transfer boost funds to protocol
+    (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+    
+    ;; Record boost transaction
+    (map-set post-boosts
+      { post-id: post-id, booster: tx-sender }
+      { amount: amount, boosted-at: current-block }
+    )
+    
+    ;; Update post's total boost amount
+    (match (get-post post-id)
+      post-data
+      (map-set posts
+        { post-id: post-id }
+        (merge post-data { boosted-amount: (+ (get boosted-amount post-data) amount) })
+      )
+      false
+    )
+    
+    (ok true)
+  )
+)
