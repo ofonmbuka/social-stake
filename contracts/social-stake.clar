@@ -109,3 +109,142 @@
   { endorser: uint, endorsed: uint }
   { endorsed-at: uint, stake-amount: uint, message: (string-utf8 140) }
 )
+
+;; Reputation Staking Pools
+(define-map profile-stakes
+  { profile-id: uint, staker: principal }
+  { amount: uint, staked-at: uint }
+)
+
+;; Content Amplification System
+(define-map post-boosts
+  { post-id: uint, booster: principal }
+  { amount: uint, boosted-at: uint }
+)
+
+;; READ-ONLY QUERY FUNCTIONS
+
+;; Retrieve profile by unique identifier
+(define-read-only (get-profile (profile-id uint))
+  (map-get? profiles { profile-id: profile-id })
+)
+
+;; Resolve profile by username
+(define-read-only (get-profile-by-username (username (string-ascii 50)))
+  (match (map-get? username-to-profile username)
+    profile-id (get-profile profile-id)
+    none
+  )
+)
+
+;; Find profile by blockchain address
+(define-read-only (get-profile-by-principal (user principal))
+  (match (map-get? principal-to-profile user)
+    profile-id (get-profile profile-id)
+    none
+  )
+)
+
+;; Check username availability
+(define-read-only (is-username-available (username (string-ascii 50)))
+  (is-none (map-get? username-to-profile username))
+)
+
+;; Verify follow relationship
+(define-read-only (is-following (follower-id uint) (following-id uint))
+  (match (map-get? following { follower: follower-id, following: following-id })
+    follow-data (get is-active follow-data)
+    false
+  )
+)
+
+;; Retrieve content by post ID
+(define-read-only (get-post (post-id uint))
+  (map-get? posts { post-id: post-id })
+)
+
+;; Get next available profile ID
+(define-read-only (get-next-profile-id)
+  (var-get next-profile-id)
+)
+
+;; Get next available post ID
+(define-read-only (get-next-post-id)
+  (var-get next-post-id)
+)
+
+;; Calculate dynamic reputation score
+(define-read-only (calculate-reputation-score (profile-id uint))
+  (match (get-profile profile-id)
+    profile-data
+    (let
+      (
+        (base-score (get staked-amount profile-data))
+        (follower-bonus (* (get follower-count profile-data) u1000))
+        (endorsement-bonus (* (get total-endorsements profile-data) u2000))
+        (post-bonus (* (get post-count profile-data) u500))
+      )
+      (+ base-score (+ follower-bonus (+ endorsement-bonus post-bonus)))
+    )
+    u0
+  )
+)
+
+;; CORE PROTOCOL FUNCTIONS
+
+;; Create verified user profile with stake
+(define-public (create-profile 
+  (username (string-ascii 50))
+  (bio (string-utf8 280))
+  (avatar-url (string-ascii 200))
+)
+  (let
+    (
+      (profile-id (var-get next-profile-id))
+      (current-block stacks-block-height)
+    )
+    ;; Verify no existing profile for this principal
+    (asserts! (is-none (map-get? principal-to-profile tx-sender)) ERR_PROFILE_EXISTS)
+    
+    ;; Ensure username uniqueness
+    (asserts! (is-username-available username) ERR_PROFILE_EXISTS)
+    
+    ;; Validate minimum stake requirement
+    (asserts! (>= (stx-get-balance tx-sender) MIN_PROFILE_STAKE) ERR_INSUFFICIENT_FUNDS)
+    
+    ;; Lock stake in protocol
+    (try! (stx-transfer? MIN_PROFILE_STAKE tx-sender (as-contract tx-sender)))
+    
+    ;; Initialize profile record
+    (map-set profiles
+      { profile-id: profile-id }
+      {
+        owner: tx-sender,
+        username: username,
+        bio: bio,
+        avatar-url: avatar-url,
+        created-at: current-block,
+        staked-amount: MIN_PROFILE_STAKE,
+        reputation-score: MIN_PROFILE_STAKE,
+        follower-count: u0,
+        following-count: u0,
+        post-count: u0,
+        total-endorsements: u0,
+        is-active: true
+      }
+    )
+    
+    ;; Establish identity mappings
+    (map-set username-to-profile username profile-id)
+    (map-set principal-to-profile tx-sender profile-id)
+    (map-set profile-stakes 
+      { profile-id: profile-id, staker: tx-sender }
+      { amount: MIN_PROFILE_STAKE, staked-at: current-block }
+    )
+    
+    ;; Increment profile counter
+    (var-set next-profile-id (+ profile-id u1))
+    
+    (ok profile-id)
+  )
+)
